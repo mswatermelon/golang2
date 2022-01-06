@@ -5,22 +5,16 @@ import (
 	"time"
 )
 
-type Handler func()
-
-func createGorutine() {
-	panic("A-A-A!!!")
-}
-
-func runGorutine() {
+func selfRecover() {
 	defer func() {
 		if v := recover(); v != nil {
-			fmt.Println("recovered", v)
+			fmt.Println("recovered after", v)
 		}
 	}()
 	panic("A-A-A!!!")
 }
 
 func main() {
-	go runGorutine()
+	go selfRecover()
 	time.Sleep(time.Second)
 }

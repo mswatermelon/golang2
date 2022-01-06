@@ -31,7 +31,7 @@ func getValue(index int) (result int, err error) {
 
 	defer func() {
 		if v := recover(); v != nil {
-			err = New("Index out of range")
+			err = New(fmt.Errorf("Error happened during getting value: %q", v).Error())
 		}
 	}()
 
