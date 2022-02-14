@@ -15,9 +15,16 @@ import (
 )
 
 var (
-	targetPath = flag.String("path", ".", "Target directory path")
-	workersCount = flag.Int("count", runtime.NumCPU(), "Count of workers that will process directory")
-	force = flag.Bool("force", true, "if force - continue on error")
+	allFlags = map[string]string{
+		"path": "Target directory path",
+		"count": "Count of workers that will process directory",
+		"force": "If force - continue on error",
+		"help": "Print available flags",
+	}
+	targetPath = flag.String("path", ".", allFlags["path"])
+	workersCount = flag.Int("count", runtime.NumCPU(), allFlags["count"])
+	force = flag.Bool("force", true, allFlags["force"])
+	help = flag.Bool("help", false, "Print available flags")
 )
 
 type FileToHashMap = map[string]string
@@ -157,6 +164,13 @@ func RemoveDuplicates(allHashes FileToHashMap) error {
 
 func main()  {
 	flag.Parse()
+	if *help {
+		fmt.Println("You can use flags:")
+		for key, value := range(allFlags) {
+			fmt.Printf("--%v\t %v\n", key, value)
+		}
+		return
+	}
 	children := make([]string, 0)
 	if len(*targetPath) == 0 {
 		err := fmt.Errorf("Target directory path can not be empty")
