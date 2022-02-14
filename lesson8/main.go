@@ -28,7 +28,7 @@ type DirData struct {
 	err         error
 }
 
-func isDirectory(path string) (bool, error) {
+func IsDirectory(path string) (bool, error) {
 	fileInfo, err := os.Stat(path)
 	if err != nil {
 		return false, err
@@ -37,12 +37,12 @@ func isDirectory(path string) (bool, error) {
 	return fileInfo.IsDir(), err
 }
 
-func innerWorker(source string) (dirPath []string, fileHash FileToHashMap, err error) {
+func InnerWorker(source string) (dirPath []string, fileHash FileToHashMap, err error) {
 	path, err := filepath.Abs(source)
 	if err != nil {
 		return dirPath, fileHash, err
 	}
-	isDir, err := isDirectory(path)
+	isDir, err := IsDirectory(path)
 	if err != nil {
 		return dirPath, fileHash, err
 	}
@@ -77,14 +77,14 @@ func innerWorker(source string) (dirPath []string, fileHash FileToHashMap, err e
 	return nil, fileHash, nil
 }
 
-func worker(
+func Worker(
 	children []string,
 	directories chan DirData,
 	wg *sync.WaitGroup,
 ) {
 	defer wg.Done()
 	for _, dir := range children {
-		dirItems, fileHash, err := innerWorker(dir)
+		dirItems, fileHash, err := InnerWorker(dir)
 		if err != nil {
 			if *force {
 				continue
@@ -99,7 +99,7 @@ func worker(
 	}
 }
 
-func investigate(workersCount int, children []string) chan DirData {
+func Investigate(workersCount int, children []string) chan DirData {
 	var wg sync.WaitGroup
 
 	childrenLen := len(children)
@@ -112,9 +112,9 @@ func investigate(workersCount int, children []string) chan DirData {
 	for i := 0; i < workersCount; i++ {
 		wg.Add(1)
 		if i == workersCount - 1 {
-			go worker(children[x:childrenLen], directories, &wg)
+			go Worker(children[x:childrenLen], directories, &wg)
 		} else {
-			go worker(children[x:x+tasksCount], directories, &wg)
+			go Worker(children[x:x+tasksCount], directories, &wg)
 			x += tasksCount
 		}
 	}
@@ -127,10 +127,32 @@ func investigate(workersCount int, children []string) chan DirData {
 	return directories
 }
 
-func copyHashes(targetMap *FileToHashMap, originalMap *FileToHashMap) {
+func CopyHashes(targetMap *FileToHashMap, originalMap *FileToHashMap) {
 	for key, value := range *originalMap {
 		(*targetMap)[key] = value
 	}
+}
+
+func RemoveDuplicates(allHashes FileToHashMap) error {
+	hashToFilesMap := make(map[string][]string)
+	for key, value := range allHashes {
+		hashToFilesMap[value] = append(hashToFilesMap[value], key)
+	}
+	for _, value := range hashToFilesMap {
+		if len(value) <= 1 {
+			continue
+		}
+		for _, file := range value[1:] {
+			fmt.Println(file)
+			err := os.Remove(file)
+
+			if err != nil {
+				return err
+			}
+		}
+		fmt.Println()
+	}
+	return nil
 }
 
 func main()  {
@@ -148,7 +170,7 @@ func main()  {
 		var newChildren []string
 		fHashes := make(FileToHashMap)
 
-		directories := investigate(*workersCount, children)
+		directories := Investigate(*workersCount, children)
 
 		for i := range directories {
 			if i.err != nil {
@@ -166,27 +188,12 @@ func main()  {
 				}
 			}
 		}
-		copyHashes(&allHashes, &fHashes)
+		CopyHashes(&allHashes, &fHashes)
 		children = newChildren
 	}
 
-	hashToFilesMap := make(map[string][]string)
-	for key, value := range allHashes {
-		hashToFilesMap[value] = append(hashToFilesMap[value], key)
-	}
-	for _, value := range hashToFilesMap {
-		if len(value) <= 1 {
-			continue
-		}
-		for _, file := range value[1:] {
-			fmt.Println(file)
-			err := os.Remove(file)
-
-			if err != nil {
-				fmt.Printf(err.Error())
-				os.Exit(1)
-			}
-		}
-		fmt.Println()
+	if err := RemoveDuplicates(allHashes); err != nil {
+		fmt.Printf(err.Error())
+		os.Exit(1)
 	}
 }
