@@ -1,0 +1,213 @@
+package main
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"flag"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"math"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sync"
+)
+
+var (
+	allFlags = map[string]string{
+		"path": "Target directory path",
+		"count": "Count of workers that will process directory",
+		"force": "If force - continue on error",
+		"help": "Print available flags",
+	}
+	targetPath = flag.String("path", ".", allFlags["path"])
+	workersCount = flag.Int("count", runtime.NumCPU(), allFlags["count"])
+	force = flag.Bool("force", true, allFlags["force"])
+	help = flag.Bool("help", false, "Print available flags")
+)
+
+type FileToHashMap = map[string]string
+
+type DirData struct {
+	directories []string
+	fileHash    FileToHashMap
+	err         error
+}
+
+func IsDirectory(path string) (bool, error) {
+	fileInfo, err := os.Stat(path)
+	if err != nil {
+		return false, err
+	}
+
+	return fileInfo.IsDir(), err
+}
+
+func InnerWorker(source string) (dirPath []string, fileHash FileToHashMap, err error) {
+	path, err := filepath.Abs(source)
+	if err != nil {
+		return dirPath, fileHash, err
+	}
+	isDir, err := IsDirectory(path)
+	if err != nil {
+		return dirPath, fileHash, err
+	}
+	if isDir {
+		items, err := ioutil.ReadDir(path)
+		if err != nil {
+			return dirPath, fileHash, err
+		}
+		result := make([]string, len(items))
+		for i := range items {
+			result[i] = filepath.Join(path, items[i].Name())
+		}
+		return result, nil, nil
+	}
+	h := sha256.New()
+	f, err := os.Open(path)
+	if err != nil {
+		return dirPath, fileHash, err
+	}
+	if _, err := io.Copy(h, f); err != nil {
+		if err := f.Close(); err != nil {
+			return dirPath, fileHash, err
+		}
+		return dirPath, fileHash, err
+	}
+	fileHash = FileToHashMap{
+		path: hex.EncodeToString(h.Sum(nil)),
+	}
+	if err := f.Close(); err != nil {
+		return dirPath, fileHash, err
+	}
+	return nil, fileHash, nil
+}
+
+func Worker(
+	children []string,
+	directories chan DirData,
+	wg *sync.WaitGroup,
+) {
+	defer wg.Done()
+	for _, dir := range children {
+		dirItems, fileHash, err := InnerWorker(dir)
+		if err != nil {
+			if *force {
+				continue
+			}
+			break
+		}
+		directories <- DirData{
+			directories: dirItems,
+			fileHash:    fileHash,
+			err:         err,
+		}
+	}
+}
+
+func Investigate(workersCount int, children []string) chan DirData {
+	var wg sync.WaitGroup
+
+	childrenLen := len(children)
+	directories := make(chan DirData)
+	tasksCount := int(math.Max(float64(childrenLen/workersCount), 1))
+	x := 0
+	if workersCount > tasksCount {
+		workersCount = tasksCount
+	}
+	for i := 0; i < workersCount; i++ {
+		wg.Add(1)
+		if i == workersCount - 1 {
+			go Worker(children[x:childrenLen], directories, &wg)
+		} else {
+			go Worker(children[x:x+tasksCount], directories, &wg)
+			x += tasksCount
+		}
+	}
+
+	go func() {
+		wg.Wait()
+		close(directories)
+	}()
+
+	return directories
+}
+
+func CopyHashes(targetMap *FileToHashMap, originalMap *FileToHashMap) {
+	for key, value := range *originalMap {
+		(*targetMap)[key] = value
+	}
+}
+
+func RemoveDuplicates(allHashes FileToHashMap) error {
+	hashToFilesMap := make(map[string][]string)
+	for key, value := range allHashes {
+		hashToFilesMap[value] = append(hashToFilesMap[value], key)
+	}
+	for _, value := range hashToFilesMap {
+		if len(value) <= 1 {
+			continue
+		}
+		for _, file := range value[1:] {
+			fmt.Println(file)
+			err := os.Remove(file)
+
+			if err != nil {
+				return err
+			}
+		}
+		fmt.Println()
+	}
+	return nil
+}
+
+func main()  {
+	flag.Parse()
+	if *help {
+		fmt.Println("You can use flags:")
+		for key, value := range(allFlags) {
+			fmt.Printf("--%v\t %v\n", key, value)
+		}
+		return
+	}
+	children := make([]string, 0)
+	if len(*targetPath) == 0 {
+		err := fmt.Errorf("Target directory path can not be empty")
+		fmt.Printf(err.Error())
+		os.Exit(1)
+	}
+	children = append(children, *targetPath)
+
+	allHashes := make(FileToHashMap)
+	for len(children) > 0 {
+		var newChildren []string
+		fHashes := make(FileToHashMap)
+
+		directories := Investigate(*workersCount, children)
+
+		for i := range directories {
+			if i.err != nil {
+				fmt.Printf(i.err.Error())
+				os.Exit(1)
+			}
+			if i.fileHash == nil {
+				newChildren = append(newChildren, i.directories...)
+			} else {
+				hash := i.fileHash
+				if hash != nil {
+					for k, v := range hash {
+						fHashes[k] = v
+					}
+				}
+			}
+		}
+		CopyHashes(&allHashes, &fHashes)
+		children = newChildren
+	}
+
+	if err := RemoveDuplicates(allHashes); err != nil {
+		fmt.Printf(err.Error())
+		os.Exit(1)
+	}
+}
